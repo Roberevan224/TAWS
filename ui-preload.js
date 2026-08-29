@@ -1,14 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
-function forward(channel){ ipcRenderer.on(channel, (_event, data) => window.dispatchEvent(new CustomEvent(channel, { detail: data }))); }
-['taws:tab-created','taws:active','taws:navigation','taws:title','taws:favicon','taws:loading'].forEach(forward);
-contextBridge.exposeInMainWorld('taws', {
-  newTab: (url) => ipcRenderer.invoke('taws:new-tab', url),
-  activate: (id) => ipcRenderer.invoke('taws:activate', id),
-  navigate: (id,url) => ipcRenderer.invoke('taws:navigate', {id,url}),
-  back: (id) => ipcRenderer.invoke('taws:back', id),
-  forward: (id) => ipcRenderer.invoke('taws:forward', id),
-  reload: (id) => ipcRenderer.invoke('taws:reload', id),
-  closeTab: (id) => ipcRenderer.invoke('taws:close-tab', id),
-  loadPasswords: () => ipcRenderer.invoke('taws:password-load'),
-  savePasswords: (value) => ipcRenderer.invoke('taws:password-save', value)
+const allowed=['taws:created','taws:tab','taws:active','taws:closed','taws:state','taws:history','taws:error','taws:download'];
+contextBridge.exposeInMainWorld('taws',{
+ newTab:url=>ipcRenderer.invoke('taws:new-tab',url),activate:id=>ipcRenderer.invoke('taws:activate',id),navigate:url=>ipcRenderer.invoke('taws:navigate',url),back:()=>ipcRenderer.invoke('taws:back'),forward:()=>ipcRenderer.invoke('taws:forward'),reload:()=>ipcRenderer.invoke('taws:reload'),stop:()=>ipcRenderer.invoke('taws:stop'),closeTab:id=>ipcRenderer.invoke('taws:close-tab',id),home:()=>ipcRenderer.invoke('taws:home'),devtools:()=>ipcRenderer.invoke('taws:devtools'),openExternal:url=>ipcRenderer.invoke('taws:external',url),loadVault:()=>ipcRenderer.invoke('taws:vault-load'),saveVault:v=>ipcRenderer.invoke('taws:vault-save',v),
+ on:(channel,cb)=>{if(allowed.includes(channel))ipcRenderer.on(channel,(_e,data)=>cb(data))}
 });
