@@ -1,14 +1,85 @@
-const { app, BrowserWindow, BaseWindow, WebContentsView, ipcMain, safeStorage, session } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, safeStorage, session, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+
 let win;
+let chromeView;
+let activeId = null;
+let nextId = 1;
 const tabs = new Map();
-let nextTabId = 1;
-function normalize(input){const value=String(input||'').trim();if(!value)return'https://www.google.com';if(/^[a-z][a-z0-9+.-]*:\/\//i.test(value))return value;if(/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(value))return`https://${value}`;return`https://www.google.com/search?q=${encodeURIComponent(value)}`;}
-function layout(){if(!win)return;const [width,height]=win.getContentSize();for(const tab of tabs.values())tab.view.setBounds({x:0,y:98,width,height:Math.max(1,height-98)});}
-function send(channel,data){if(win&&!win.isDestroyed())win.webContents.send(channel,data);}
-function createTab(url='https://www.google.com'){const id=nextTabId++;const view=new WebContentsView({webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});tabs.set(id,{id,view});win.contentView.addChildView(view);layout();view.webContents.setWindowOpenHandler(({url:opened})=>{const newId=createTab(opened);activateTab(newId);return{action:'deny'};});view.webContents.on('did-navigate',(_e,u)=>send('taws:navigation',{id,url:u,title:view.webContents.getTitle()}));view.webContents.on('did-navigate-in-page',(_e,u)=>send('taws:navigation',{id,url:u,title:view.webContents.getTitle()}));view.webContents.on('page-title-updated',(_e,title)=>send('taws:title',{id,title}));view.webContents.on('did-start-loading',()=>send('taws:loading',{id,loading:true}));view.webContents.on('did-stop-loading',()=>send('taws:loading',{id,loading:false}));view.webContents.on('destroyed',()=>tabs.delete(id));view.webContents.loadURL(normalize(url));send('taws:tab-created',{id,url:normalize(url)});return id;}
-function activateTab(id){const numeric=Number(id);if(!tabs.has(numeric))return;const [width,height]=win.getContentSize();for(const[tabId,tab]of tabs)tab.view.setBounds(tabId===numeric?{x:0,y:98,width,height:Math.max(1,height-98)}:{x:0,y:98,width:0,height:0});send('taws:active',{id:numeric});}
-function createWindow(){win=new BaseWindow({width:1280,height:800,minWidth:800,minHeight:600,backgroundColor:'#0b0d12'});const chrome=new WebContentsView({webPreferences:{preload:path.join(__dirname,'ui-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true}});win.contentView.addChildView(chrome);chrome.setBounds({x:0,y:0,width:1280,height:98});chrome.setAutoResize({width:true});chrome.webContents.loadFile(path.join(__dirname,'ui.html'));chrome.webContents.on('did-finish-load',()=>{const id=createTab();activateTab(id);});win.on('resize',layout);win.on('closed',()=>{for(const tab of tabs.values())tab.view.webContents.close();chrome.webContents.close();tabs.clear();win=null;});}
-app.whenReady().then(()=>{session.defaultSession.setPermissionRequestHandler((_wc,_permission,callback)=>callback(false));ipcMain.handle('taws:new-tab',(_e,url)=>{const id=createTab(url);activateTab(id);return id;});ipcMain.handle('taws:activate',(_e,id)=>activateTab(id));ipcMain.handle('taws:navigate',(_e,{id,url})=>tabs.get(Number(id))?.view.webContents.loadURL(normalize(url)));ipcMain.handle('taws:back',(_e,id)=>tabs.get(Number(id))?.view.webContents.navigationHistory.goBack());ipcMain.handle('taws:forward',(_e,id)=>tabs.get(Number(id))?.view.webContents.navigationHistory.goForward());ipcMain.handle('taws:reload',(_e,id)=>tabs.get(Number(id))?.view.webContents.reload());ipcMain.handle('taws:close-tab',(_e,id)=>{const tab=tabs.get(Number(id));if(!tab)return;win.contentView.removeChildView(tab.view);tab.view.webContents.close();tabs.delete(Number(id));if(!tabs.size){const newId=createTab();activateTab(newId);}});ipcMain.handle('taws:password-load',()=>{const file=path.join(app.getPath('userData'),'vault.dat');if(!safeStorage.isEncryptionAvailable()||!fs.existsSync(file))return null;try{return safeStorage.decryptString(fs.readFileSync(file));}catch{return null;}});ipcMain.handle('taws:password-save',(_e,value)=>{if(!safeStorage.isEncryptionAvailable())throw new Error('OS encrypted storage unavailable');const file=path.join(app.getPath('userData'),'vault.dat');fs.writeFileSync(file,safeStorage.encryptString(JSON.stringify(value)));return true;});createWindow();app.on('activate',()=>{if(!BrowserWindow.getAllWindows().length)createWindow();});});
-app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit();});
+const HOME = 'file://' + path.join(__dirname, 'home.html');
+
+function uiSend(channel, data) { if (chromeView && !chromeView.webContents.isDestroyed()) chromeView.webContents.send(channel, data); }
+function normalize(input) {
+  const v = String(input || '').trim();
+  if (!v) return 'https://www.google.com';
+  if (/^https?:\/\//i.test(v)) return v;
+  if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(v)) return 'https://' + v;
+  return 'https://www.google.com/search?q=' + encodeURIComponent(v);
+}
+function browserBounds() { const [w,h] = win.getContentSize(); return { x:0, y:104, width:w, height:Math.max(1,h-104) }; }
+function syncTab(tab) {
+  if (!tab) return;
+  const wc = tab.view.webContents;
+  tab.url = wc.getURL() || tab.url;
+  tab.title = wc.getTitle() || tab.title || 'New Tab';
+  uiSend('taws:tab', { id:tab.id, title:tab.title, url:tab.url, loading:wc.isLoading() });
+  if (tab.id === activeId) uiSend('taws:state', { id:tab.id, title:tab.title, url:tab.url, loading:wc.isLoading(), back:wc.navigationHistory.canGoBack(), forward:wc.navigationHistory.canGoForward() });
+}
+function createTab(url='https://www.google.com', activate=true) {
+  const id=nextId++;
+  const view=new WebContentsView({webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,spellcheck:true}});
+  const tab={id,view,title:'New Tab',url}; tabs.set(id,tab); win.contentView.addChildView(view); view.setVisible(false); view.setBounds(browserBounds());
+  const wc=view.webContents;
+  wc.setWindowOpenHandler(({url:opened})=>{createTab(opened,true);return{action:'deny'}});
+  wc.on('did-start-loading',()=>syncTab(tab)); wc.on('did-stop-loading',()=>syncTab(tab));
+  wc.on('page-title-updated',()=>syncTab(tab));
+  wc.on('did-navigate',(_e,u)=>{tab.url=u;syncTab(tab);uiSend('taws:history',{url:u,title:tab.title})});
+  wc.on('did-navigate-in-page',(_e,u)=>{tab.url=u;syncTab(tab)});
+  wc.on('did-fail-load',(_e,code,desc,u,main)=>{if(main&&code!==-3)uiSend('taws:error',{id,message:desc,url:u})});
+  wc.on('render-process-gone',()=>uiSend('taws:error',{id,message:'Page process stopped. Reload the tab to continue.',url:tab.url}));
+  wc.loadURL(url === 'taws://home' ? HOME : normalize(url));
+  uiSend('taws:created',{id,title:tab.title,url});
+  if(activate) activateTab(id);
+  return id;
+}
+function activateTab(id) {
+  id=Number(id); const tab=tabs.get(id); if(!tab)return;
+  for(const t of tabs.values())t.view.setVisible(false);
+  activeId=id; tab.view.setVisible(true); tab.view.setBounds(browserBounds()); tab.view.webContents.focus();
+  uiSend('taws:active',{id}); syncTab(tab);
+}
+function closeTab(id) {
+  id=Number(id); const tab=tabs.get(id); if(!tab)return; const was=id===activeId;
+  win.contentView.removeChildView(tab.view); tab.view.webContents.close(); tabs.delete(id); uiSend('taws:closed',{id});
+  if(was){const next=[...tabs.keys()].pop(); next ? activateTab(next) : createTab();}
+}
+function activeTab(){return tabs.get(activeId)}
+function createWindow(){
+  win=new BrowserWindow({width:1280,height:820,minWidth:900,minHeight:600,backgroundColor:'#0a0d12',title:'TAWS — Tech Axel Web Surfer',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  chromeView=new WebContentsView({webPreferences:{preload:path.join(__dirname,'ui-preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  win.contentView.addChildView(chromeView); chromeView.setBounds({x:0,y:0,width:1280,height:104}); chromeView.webContents.loadFile(path.join(__dirname,'ui.html'));
+  win.on('resize',()=>{const [w]=win.getContentSize();chromeView.setBounds({x:0,y:0,width:w,height:104});for(const t of tabs.values())t.view.setBounds(browserBounds())});
+  win.on('closed',()=>{for(const t of tabs.values())t.view.webContents.close();tabs.clear();chromeView.webContents.close();win=null;chromeView=null;});
+  chromeView.webContents.on('did-finish-load',()=>{if(!tabs.size)createTab('https://www.google.com');});
+}
+function vaultFile(){return path.join(app.getPath('userData'),'vault.dat')}
+app.whenReady().then(()=>{
+  session.defaultSession.setPermissionRequestHandler((_wc,_p,cb)=>cb(false));
+  session.defaultSession.on('will-download',(_e,item)=>{const file=path.join(app.getPath('downloads'),item.getFilename());item.setSavePath(file);uiSend('taws:download',{name:item.getFilename(),state:'started',path:file});item.once('done',(_e,state)=>uiSend('taws:download',{name:item.getFilename(),state,path:file}))});
+  ipcMain.handle('taws:new-tab',(_e,url)=>createTab(url||'https://www.google.com',true));
+  ipcMain.handle('taws:activate',(_e,id)=>activateTab(id));
+  ipcMain.handle('taws:navigate',(_e,url)=>activeTab()?.view.webContents.loadURL(url==='taws://home'?HOME:normalize(url)));
+  ipcMain.handle('taws:back',()=>{const t=activeTab();if(t?.view.webContents.navigationHistory.canGoBack())t.view.webContents.navigationHistory.goBack()});
+  ipcMain.handle('taws:forward',()=>{const t=activeTab();if(t?.view.webContents.navigationHistory.canGoForward())t.view.webContents.navigationHistory.goForward()});
+  ipcMain.handle('taws:reload',()=>activeTab()?.view.webContents.reload());
+  ipcMain.handle('taws:stop',()=>activeTab()?.view.webContents.stop());
+  ipcMain.handle('taws:close-tab',(_e,id)=>closeTab(id));
+  ipcMain.handle('taws:home',()=>activeTab()?.view.webContents.loadFile(path.join(__dirname,'home.html')));
+  ipcMain.handle('taws:devtools',()=>activeTab()?.view.webContents.openDevTools());
+  ipcMain.handle('taws:external',(_e,url)=>shell.openExternal(url));
+  ipcMain.handle('taws:vault-load',()=>{const f=vaultFile();if(!safeStorage.isEncryptionAvailable()||!fs.existsSync(f))return[];try{return JSON.parse(safeStorage.decryptString(fs.readFileSync(f)))}catch{return[]}});
+  ipcMain.handle('taws:vault-save',(_e,value)=>{if(!safeStorage.isEncryptionAvailable())throw new Error('Encrypted OS storage unavailable');fs.mkdirSync(path.dirname(vaultFile()),{recursive:true});fs.writeFileSync(vaultFile(),safeStorage.encryptString(JSON.stringify(value)));return true});
+  createWindow(); app.on('activate',()=>{if(!BrowserWindow.getAllWindows().length)createWindow()});
+});
+app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit()});
