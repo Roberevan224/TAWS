@@ -1,30 +1,45 @@
 name: Build TAWS
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   linux:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Setup Node 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+
       - name: Install dependencies
         run: npm install
+
       - name: Build Linux packages
         run: npm run dist
+
+      - name: Verify Linux packages exist
+        run: |
+          ls -lh dist
+          test -n "$(find dist -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$(find dist -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: taws-linux
-          path: dist/*.{deb,AppImage}
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/heads/main')
         uses: softprops/action-gh-release@v2
