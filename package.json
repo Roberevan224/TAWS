@@ -1,6 +1,6 @@
 {
   "name": "taws",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Tech Axel Web Surfer",
   "author": {
     "name": "Tech Axel",
@@ -9,7 +9,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --linux AppImage deb"
+    "dist": "electron-builder --linux AppImage"
   },
   "devDependencies": {
     "electron": "^37.0.0",
@@ -20,18 +20,12 @@
     "productName": "TAWS",
     "executableName": "taws",
     "linux": {
-      "target": ["AppImage", "deb"],
-      "category": "Network;WebBrowser;",
-      "maintainer": "Tech Axel <roberevan224@gmail.com>",
-      "desktopName": "taws",
-      "synopsis": "Tech Axel Web Surfer",
+      "target": ["AppImage"],
+      "category": "Network",
       "icon": "assets/taws.svg"
     },
     "appImage": {
       "artifactName": "TAWS-${version}-${arch}.AppImage"
-    },
-    "deb": {
-      "artifactName": "TAWS-${version}-${arch}.deb"
     }
   }
 }
