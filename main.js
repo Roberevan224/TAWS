@@ -1,6 +1,13 @@
 const { app, BrowserWindow, WebContentsView, ipcMain, safeStorage, session, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+
+// Give Linux/ChromeOS a normal desktop identity and use the in-process Chromium
+// audio service. This makes the PulseAudio stream belong to TAWS instead of a
+// generic Chromium utility stream and avoids the Crostini volume problem.
+app.setDesktopName('taws.desktop');
+app.commandLine.appendSwitch('disable-features', 'AudioServiceOutOfProcess');
+
 let win, chromeView, activeId = null, nextId = 1, setupMode = false;
 const tabs = new Map();
 const HOME = 'file://' + path.join(__dirname, 'home.html');
