@@ -14,39 +14,44 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Install dependencies
         run: npm install
-
       - name: Build Linux packages
         run: npm run dist
-
-      - name: Verify Linux packages exist
+      - name: Verify Linux package exists
         run: |
           ls -lh dist
-          test -n "$(find dist -maxdepth 1 -type f -name '*.deb' -print -quit)"
           test -n "$(find dist -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
-
-      - name: Upload build artifacts
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: taws-linux
-          path: |
-            dist/*.deb
-            dist/*.AppImage
+          path: dist/*.AppImage
 
-      - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/heads/main')
-        uses: softprops/action-gh-release@v2
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
         with:
-          tag_name: v${{ github.run_number }}
-          name: TAWS v${{ github.run_number }}
-          generate_release_notes: true
-          files: |
-            dist/*.deb
-            dist/*.AppImage
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Build Windows installer
+        run: npx electron-builder --win nsis
+      - name: Verify Windows installer exists
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path dist -Filter *.exe | Format-Table Name,Length
+          if (-not (Get-ChildItem -Path dist -Filter *.exe)) { throw 'No Windows EXE was produced.' }
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: taws-windows-installer
+          path: dist/*.exe
